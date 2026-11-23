@@ -304,7 +304,7 @@ tbody tr.sel td { background: var(--surface); }
 <script>
 (() => {
 'use strict';
-const VERSION = '1.1';
+const VERSION = '1.2';
 const $ = id => document.getElementById(id);
 const RAD = Math.PI / 180, R = 6371000, KMH = 3.6;
 const LS_INDEX = 'kart.index.v1', LS_SESSION = 'kart.session.', LS_ACTIVE = 'kart.active.v1';
@@ -609,6 +609,8 @@ function updState() {
   const wakeOn = !!(wake && !wake.released), waited = Date.now() - rec.wall0, hasMot = rec.mot.g.length > 5;
   let msg;
   if (rec.pts.length) msg = 'Opname loopt. Stop je telefoon nu in een dichte zak.';
+  else if (rec.geoErr === 1) msg = 'Je telefoon geeft deze pagina geen locatie. Zet aan: Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari-websites → Bij gebruik van app, met Exacte locatie. Stop daarna, sluit de app helemaal af en start opnieuw.' + (hasMot ? ' De bewegingssensor meet intussen wel.' : '');
+  else if (rec.geoErr === 2) msg = 'Je telefoon kan nu geen positie bepalen. Staat Locatievoorzieningen aan (Instellingen → Privacy en beveiliging)?' + (hasMot ? ' De bewegingssensor meet intussen wel.' : '');
   else if (waited < 25000) msg = 'GPS zoeken… Buiten duurt dat een paar tellen.';
   else if (hasMot) msg = 'Geen GPS-ontvangst hier. De bewegingssensor meet wel door: G-krachten en geschatte rondetijden. Je kunt hem wegstoppen.';
   else msg = 'Geen GPS-ontvangst en geen bewegingssensor. Zo wordt er niets gemeten.';
@@ -666,7 +668,7 @@ function onFix(pos) {
   const c = pos.coords, now = Date.now();
   let ts = pos.timestamp;
   if (!SIM && (!(ts > 0) || Math.abs(ts - now) > 120000)) ts = now;
-  rec.lastWall = now;
+  rec.lastWall = now; rec.geoErr = 0;
   const acc = c.accuracy || 0;
   setGps('GPS ±' + Math.round(acc) + ' m', acc <= 10 ? 'good' : acc <= 25 ? 'fair' : 'bad');
   if (rec.last && ts <= rec.last.ts) return;
@@ -689,8 +691,11 @@ function onFix(pos) {
 }
 function onGeoError(err) {
   if (!rec) return;
-  if (err && err.code === 1) setGps('Locatie geweigerd', 'bad');
+  rec.geoErr = err ? err.code : 0;
+  if (rec.geoErr === 1) setGps('Locatie geweigerd', 'bad');
+  else if (rec.geoErr === 2) setGps('Locatie uit', 'bad');
   else if (!rec.pts.length) setGps('GPS zoeken…', '');
+  updState();
 }
 function startWatch() {
   if (!rec) return;
@@ -700,8 +705,10 @@ function startWatch() {
 function tick() {
   if (!rec) return;
   $('recTime').textContent = fmtClock((SIM ? rec.mot.g.length * rec.mot.dt : Date.now() - rec.wall0) / 1000);
-  if (rec.lastWall && Date.now() - rec.lastWall > 6000) setGps('GPS-signaal kwijt', 'bad');
-  else if (!rec.lastWall && Date.now() - rec.wall0 > 25000) setGps('Geen GPS', 'bad');
+  if (rec.geoErr === 1) setGps('Locatie geweigerd', 'bad');
+  else if (rec.geoErr === 2) setGps('Locatie uit', 'bad');
+  else if (rec.lastWall && Date.now() - rec.lastWall > 6000) setGps('GPS-signaal kwijt', 'bad');
+  else if (!rec.lastWall && Date.now() - rec.wall0 > 25000) setGps('Geen ontvangst', 'bad');
   updState();
   if (++rec.ticks % 5 === 0) { saveActive(); if (!(wake && !wake.released)) acquireWake(); }
 }
