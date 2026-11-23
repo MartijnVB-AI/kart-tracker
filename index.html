@@ -1,0 +1,1087 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kart Tracker</title>
+<meta name="description" content="Meet je snelheid, route en rondetijden tijdens het karten met de GPS van je telefoon.">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kart Tracker">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" type="image/png" href="icon.png">
+<style>
+/* Layout: one phone-width column. Instrument-style numerals; the recording screen is pure black
+   because the phone sits in a pocket with its (OLED) screen on. Single dark look by choice. */
+:root {
+  color-scheme: dark;
+  --bg: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #262624;
+  --line: #2c2c2a;
+  --axis: #383835;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --data: #3987e5;      /* speed line + fast end of the track colouring */
+  --action: #2a78d6;    /* primary button */
+  --stop: #d03b3b;      /* recording / stop */
+  --best: #9085e9;      /* fastest lap, purple as on a timing screen */
+  --good: #0ca30c;
+  --warn: #fab219;
+  --ramp: linear-gradient(90deg, #184f95, #256abf, #3987e5, #6da7ec, #9ec5f4, #cde2fb);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --num: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { height: 100%; }
+body {
+  margin: 0; min-height: 100%; background: var(--bg); color: var(--ink);
+  font: 16px/1.45 var(--font); -webkit-text-size-adjust: 100%;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+body.locked { overflow: hidden; }
+.view {
+  max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px;
+  padding-block: calc(env(safe-area-inset-top, 0px) + 22px) calc(env(safe-area-inset-bottom, 0px) + 36px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+h1 { font: 700 30px/1.1 var(--num); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+h2 { font: 600 12px/1.2 var(--font); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin: 0; }
+p { margin: 0; }
+.sub { color: var(--ink-2); font-size: 15px; margin-top: 6px; }
+.hint { color: var(--muted); font-size: 14px; margin-top: -10px; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+
+.btn {
+  appearance: none; -webkit-appearance: none; border: 0; border-radius: 14px; cursor: pointer;
+  font: 600 16px/1.1 var(--font); padding: 15px 18px; color: var(--ink); background: var(--surface-2);
+}
+.btn:focus-visible, .sess:focus-visible, tbody tr:focus-visible, summary:focus-visible, .knob:focus-visible {
+  outline: 2px solid var(--ink); outline-offset: 2px;
+}
+.btn.primary { background: var(--action); color: #fff; }
+.btn.stop { background: var(--stop); color: #fff; }
+.btn.big { width: 100%; padding: 24px 20px; font-size: 21px; border-radius: 20px; }
+.btn.ghost { background: transparent; border: 1px solid var(--axis); color: var(--ink-2); }
+.btn.small { padding: 9px 13px; font-size: 14px; border-radius: 10px; }
+.notice { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 15px; color: var(--ink-2); }
+
+details { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+summary { cursor: pointer; padding: 14px 0; font-weight: 600; list-style-position: outside; margin-left: 18px; }
+details ol { margin: 0 0 16px; padding-left: 22px; color: var(--ink-2); font-size: 15px; display: flex; flex-direction: column; gap: 10px; }
+details b { color: var(--ink); font-weight: 600; }
+
+.sess {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 14px; align-items: center;
+  width: 100%; padding: 14px 0; border: 0; border-top: 1px solid var(--line);
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.sess .d { font-weight: 600; }
+.sess .m { grid-column: 1; color: var(--muted); font-size: 14px; }
+.sess .v { grid-column: 2; grid-row: 1 / span 2; font: 700 24px/1 var(--num); }
+.sess .v small { font: 500 12px/1 var(--font); color: var(--muted); margin-left: 4px; }
+.empty { color: var(--muted); font-size: 15px; padding: 14px 0; border-top: 1px solid var(--line); }
+.foot { color: var(--muted); font-size: 13px; }
+
+/* ---------- recording screen ---------- */
+.rec {
+  position: fixed; inset: 0; z-index: 50; background: #000; color: var(--ink-2);
+  display: flex; flex-direction: column; justify-content: space-between; gap: 12px;
+  padding: calc(env(safe-area-inset-top, 0px) + 18px) max(20px, env(safe-area-inset-right, 0px))
+           calc(env(safe-area-inset-bottom, 0px) + 22px) max(20px, env(safe-area-inset-left, 0px));
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; overscroll-behavior: none;
+}
+.rec-top { display: flex; align-items: center; gap: 10px; font: 600 18px/1 var(--num); font-variant-numeric: tabular-nums; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--stop); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.rec-gps { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font: 500 14px/1 var(--font); color: var(--ink-2); }
+.rec-gps i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.rec-gps.good i { background: var(--good); }
+.rec-gps.fair i { background: var(--warn); }
+.rec-gps.bad i { background: var(--stop); }
+.rec-mid { text-align: center; }
+.rec-speed { font: 700 min(38vw, 30vh)/0.9 var(--num); font-variant-numeric: tabular-nums; letter-spacing: -0.03em; color: var(--ink); }
+.rec-unit { font: 500 15px/1.6 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.rec-row { display: flex; justify-content: center; gap: 22px; margin-top: 16px; }
+.rec-row b { display: block; font: 600 22px/1.15 var(--num); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.rec-row span { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.rec-state { margin-top: 16px; font-size: 14px; color: var(--muted); text-wrap: balance; }
+.slider { position: relative; height: 64px; border-radius: 32px; border: 1px solid var(--axis); display: flex; align-items: center; justify-content: center; touch-action: none; }
+.slider-label { padding-left: 52px; font-size: 15px; color: var(--muted); pointer-events: none; }
+.knob {
+  position: absolute; left: 4px; top: 4px; width: 54px; height: 54px; border-radius: 50%; border: 0; padding: 0;
+  background: var(--surface-2); color: var(--ink); font: 700 20px/1 var(--num); display: grid; place-items: center;
+  transition: transform .2s ease; touch-action: none; cursor: grab;
+}
+
+/* ---------- result ---------- */
+.bar { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.hero-num { font: 700 76px/0.95 var(--num); letter-spacing: -0.03em; }
+.hero-num small { font: 500 18px/1 var(--font); letter-spacing: 0; color: var(--muted); margin-left: 8px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--line); border-block: 1px solid var(--line); }
+.stats div { background: var(--bg); padding: 14px 4px 14px 0; min-width: 0; }
+.stats div:not(:nth-child(3n+1)) { padding-left: 14px; }
+.stats dt { font-size: 12px; color: var(--muted); }
+.stats dd { margin: 3px 0 0; font: 600 21px/1.15 var(--num); }
+.stats dd small { font: 500 12px/1 var(--font); color: var(--muted); margin-left: 3px; }
+.sec { display: flex; flex-direction: column; gap: 10px; }
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; }
+.sec-head .what { color: var(--ink-2); font-size: 14px; margin-left: 10px; letter-spacing: 0; text-transform: none; font-weight: 500; }
+canvas { display: block; width: 100%; background: var(--surface); border-radius: 14px; touch-action: pan-y; }
+#map { height: min(80vw, 360px); }
+#map.pick { outline: 2px solid var(--ink-2); outline-offset: 2px; cursor: crosshair; }
+#chart { height: 200px; }
+#gchart { height: 180px; }
+.field { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 15px; color: var(--ink-2); }
+.field input { width: 7.5em; font: 600 16px/1.2 var(--font); color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 10px; padding: 10px 12px; }
+.field input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.legend { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.legend i { flex: 1; height: 6px; border-radius: 3px; background: var(--ramp); }
+.readout { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.readout b { color: var(--ink); font-weight: 600; margin-right: 8px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { font: 600 11px/1 var(--font); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); text-align: right; padding: 8px 10px; }
+td { padding: 13px 10px; text-align: right; border-top: 1px solid var(--line); color: var(--ink-2); }
+th:first-child, td:first-child { text-align: left; width: 3.2em; }
+td.strong { color: var(--ink); font-weight: 600; }
+tbody tr { cursor: pointer; }
+tbody tr.sel td { background: var(--surface); }
+.bestdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--best); margin-right: 8px; vertical-align: 1px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; }
+@media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } .knob { transition: none; } }
+</style>
+</head>
+<body>
+
+<main id="home" class="view">
+  <header>
+    <h1>Kart Tracker</h1>
+    <p class="sub">Snelheid, route, G-krachten en rondetijden met de sensoren van je telefoon.</p>
+  </header>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <button id="startBtn" class="btn primary big" type="button">Start opname</button>
+  <p class="hint">Na het starten wordt het scherm zwart en vergrendeld. Sta locatie en beweging toe, en stop je telefoon dan in een dichte zak.</p>
+
+  <details>
+    <summary>Checklist voor in de pits</summary>
+    <ol>
+      <li><b>Buiten of binnen.</b> Buiten meet GPS je snelheid en route. Onder een dak valt GPS vaak weg; dan meet de bewegingssensor nog wel G-krachten en schat hij je rondetijden.</li>
+      <li><b>Twee keer toestaan.</b> Bij het starten vraagt je telefoon om beweging en om locatie. Kies bij allebei voor toestaan.</li>
+      <li><b>Exacte locatie aan.</b> Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari-websites: “Bij gebruik van app” en “Exacte locatie”.</li>
+      <li><b>Scherm blijft aan.</b> Een webpagina meet alleen zolang hij open en zichtbaar is. Het scherm blijft daarom vanzelf aan (zwart, dus zuinig). Vergrendel je telefoon niet met de zijknop.</li>
+      <li><b>Niet storen aan.</b> Een binnenkomende oproep onderbreekt de meting.</li>
+      <li><b>Dichte zak, liefst hoog.</b> Een borst- of jaszak met rits ontvangt GPS beter dan een broekzak waar je op zit.</li>
+      <li><b>Helemaal zak-proof?</b> Zet Begeleide toegang aan (Instellingen → Toegankelijkheid), druk na het starten driemaal op de zijknop en zet aanraking uit.</li>
+    </ol>
+  </details>
+
+  <section class="stack">
+    <h2>Ritten</h2>
+    <div id="list"></div>
+    <div class="row">
+      <button id="demoBtn" class="btn ghost small" type="button">Voorbeeldrit bekijken</button>
+      <button id="demoInBtn" class="btn ghost small" type="button">Voorbeeld zonder GPS</button>
+    </div>
+  </section>
+
+  <p class="foot">Je ritten staan alleen op deze telefoon. <span id="ver"></span></p>
+</main>
+
+<div id="rec" class="rec" hidden>
+  <div class="rec-top">
+    <span class="rec-dot" aria-hidden="true"></span><span id="recTime">0:00</span>
+    <span id="recGps" class="rec-gps"><i aria-hidden="true"></i><span id="recGpsTxt">GPS zoeken…</span></span>
+  </div>
+  <div class="rec-mid">
+    <div class="rec-speed" id="recSpeed">0</div>
+    <div class="rec-unit">km/h</div>
+    <div class="rec-row">
+      <div><b id="recTop">0</b><span>top km/h</span></div>
+      <div><b id="recDist">0,00</b><span>km</span></div>
+      <div><b id="recG">–</b><span>max g</span></div>
+      <div><b id="recPts">0</b><span>gps</span></div>
+    </div>
+    <p id="recState" class="rec-state"></p>
+  </div>
+  <div>
+    <div id="lockUi" class="slider">
+      <button id="knob" class="knob" type="button" aria-label="Ontgrendel het scherm">››</button>
+      <span class="slider-label">Schuif om te ontgrendelen</span>
+    </div>
+    <div id="unlockUi" class="stack" hidden>
+      <button id="stopBtn" class="btn stop big" type="button">Stop en bewaar</button>
+      <button id="relockBtn" class="btn ghost" type="button">Weer vergrendelen</button>
+    </div>
+  </div>
+</div>
+
+<main id="result" class="view" hidden>
+  <header class="bar">
+    <button id="backBtn" class="btn ghost small" type="button">‹ Ritten</button>
+    <div>
+      <h1 id="resTitle"></h1>
+      <p id="resSub" class="sub"></p>
+    </div>
+  </header>
+
+  <div id="resWarn" class="notice" hidden></div>
+
+  <section>
+    <h2 id="heroLabel">Topsnelheid</h2>
+    <div class="hero-num"><span id="sTop">0</span><small id="heroUnit">km/h</small></div>
+  </section>
+
+  <dl class="stats">
+    <div><dt>Gemiddeld</dt><dd id="sAvg">–</dd></div>
+    <div><dt>Afstand</dt><dd id="sDist">–</dd></div>
+    <div><dt>Rijtijd</dt><dd id="sTime">0:00</dd></div>
+    <div><dt>Rondes</dt><dd id="sLaps">0</dd></div>
+    <div><dt>Snelste ronde</dt><dd id="sBest">–</dd></div>
+    <div><dt id="sXLabel">GPS-marge</dt><dd id="sX">–</dd></div>
+  </dl>
+
+  <section class="sec" id="mapSec">
+    <div class="sec-head">
+      <h2>Baan<span id="mapWhat" class="what"></span></h2>
+      <button id="allBtn" class="btn ghost small" type="button">Toon hele rit</button>
+    </div>
+    <canvas id="map" role="img" aria-label="Gereden route, gekleurd op snelheid"></canvas>
+    <div class="legend"><span id="legMin">0</span><i aria-hidden="true"></i><span id="legMax">0 km/h</span></div>
+    <p id="mapHint" class="foot" hidden>Tik op een punt op de baan waar je elke ronde langskomt.</p>
+  </section>
+
+  <section class="sec" id="spdSec">
+    <div class="sec-head">
+      <h2>Snelheid in km/h</h2>
+      <div id="readout" class="readout">Sleep over de grafiek</div>
+    </div>
+    <canvas id="chart" role="img" aria-label="Snelheid over de tijd"></canvas>
+  </section>
+
+  <section class="sec" id="gSec">
+    <div class="sec-head">
+      <h2>G-kracht</h2>
+      <div id="readoutG" class="readout">Bochten en remmen samen</div>
+    </div>
+    <canvas id="gchart" role="img" aria-label="G-kracht over de tijd"></canvas>
+  </section>
+
+  <section class="sec">
+    <h2>Rondes</h2>
+    <table id="lapsTable">
+      <thead><tr><th scope="col">Nr</th><th scope="col">Tijd</th><th scope="col">Verschil</th><th scope="col" id="lapCol4">Top</th></tr></thead>
+      <tbody id="lapsBody"></tbody>
+    </table>
+    <p id="noLaps" class="foot" hidden></p>
+    <p id="lapNote" class="foot"></p>
+    <label id="lenRow" class="field" hidden>Baanlengte in meters, voor je gemiddelde snelheid
+      <input id="lenIn" type="number" inputmode="numeric" min="50" max="5000" step="1" placeholder="bijv. 400">
+    </label>
+    <div class="row" id="gateRow">
+      <button id="gateBtn" class="btn ghost small" type="button">Start/finish verplaatsen</button>
+      <button id="gateAuto" class="btn ghost small" type="button" hidden>Automatisch kiezen</button>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>Bewaren</h2>
+    <div class="row">
+      <button id="gpxBtn" class="btn ghost small" type="button">Deel als GPX</button>
+      <button id="csvBtn" class="btn ghost small" type="button">Deel als CSV</button>
+      <button id="delBtn" class="btn ghost small" type="button">Verwijder rit</button>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+'use strict';
+const VERSION = '1.1';
+const $ = id => document.getElementById(id);
+const RAD = Math.PI / 180, R = 6371000, KMH = 3.6;
+const LS_INDEX = 'kart.index.v1', LS_SESSION = 'kart.session.', LS_ACTIVE = 'kart.active.v1';
+const SIMQ = location.hash + location.search;
+const SIM = /sim/.test(SIMQ), INDOOR = /indoor/.test(SIMQ);
+const SIM_RATE = Math.max(1, parseInt((/sim(\d+)/.exec(SIMQ) || [])[1] || '1', 10));
+
+const cs = getComputedStyle(document.documentElement);
+const C = {};
+['surface', 'line', 'axis', 'ink', 'ink-2', 'muted', 'data'].forEach(k => { C[k] = cs.getPropertyValue('--' + k).trim(); });
+const CANVAS_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+
+/* ---------- helpers ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+  del(k) { try { localStorage.removeItem(k); } catch (e) {} }
+};
+const nf0 = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 0 });
+const nf1 = new Intl.NumberFormat('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const nf2 = new Intl.NumberFormat('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const nfT = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 2 });
+const dateFmt = new Intl.DateTimeFormat('nl-NL', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+function fmtClock(sec) { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); }
+function fmtLap(sec) { const t = Math.round(sec * 10), m = Math.floor(t / 600), r = t - m * 600; return m + ':' + String(Math.floor(r / 10)).padStart(2, '0') + ',' + (r % 10); }
+function dist(la1, lo1, la2, lo2) { const x = (lo2 - lo1) * RAD * Math.cos((la1 + la2) / 2 * RAD), y = (la2 - la1) * RAD; return Math.hypot(x, y) * R; }
+function notice(msg) { const n = $('notice'); n.textContent = msg || ''; n.hidden = !msg; }
+function setStat(id, value, unit) { const el = $(id); el.textContent = value; if (unit) { const s = document.createElement('small'); s.textContent = unit; el.appendChild(s); } }
+
+/* ---------- example data: a simulated kart on a made-up circuit ---------- */
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function buildTrack() {
+  const cp = [[0,0],[70,0],[150,0],[215,8],[240,40],[222,74],[180,80],[150,62],[118,70],[110,104],[138,128],[128,160],[88,166],[62,140],[70,100],[44,74],[8,84],[-28,112],[-64,96],[-70,56],[-46,20]];
+  const n = cp.length, x = [], y = [];
+  for (let i = 0; i < n; i++) {
+    const a = cp[(i + n - 1) % n], b = cp[i], c = cp[(i + 1) % n], d = cp[(i + 2) % n];
+    for (let j = 0; j < 16; j++) {
+      const t = j / 16, t2 = t * t, t3 = t2 * t;
+      x.push(0.5 * (2 * b[0] + (c[0] - a[0]) * t + (2 * a[0] - 5 * b[0] + 4 * c[0] - d[0]) * t2 + (3 * b[0] - a[0] - 3 * c[0] + d[0]) * t3));
+      y.push(0.5 * (2 * b[1] + (c[1] - a[1]) * t + (2 * a[1] - 5 * b[1] + 4 * c[1] - d[1]) * t2 + (3 * b[1] - a[1] - 3 * c[1] + d[1]) * t3));
+    }
+  }
+  const m = x.length, s = [0];
+  for (let i = 0; i < m; i++) s.push(s[i] + Math.hypot(x[(i + 1) % m] - x[i], y[(i + 1) % m] - y[i]));
+  const L = s[m], vl = [];
+  for (let i = 0; i < m; i++) {
+    const ax = x[(i + m - 1) % m], ay = y[(i + m - 1) % m], bx = x[i], by = y[i], cx = x[(i + 1) % m], cy = y[(i + 1) % m];
+    const ab = Math.hypot(bx - ax, by - ay), bc = Math.hypot(cx - bx, cy - by), ca = Math.hypot(cx - ax, cy - ay);
+    const k = ab * bc * ca > 0 ? 2 * Math.abs((bx - ax) * (cy - by) - (by - ay) * (cx - bx)) / (ab * bc * ca) : 0;
+    vl.push(Math.min(19.6, k > 1e-6 ? Math.sqrt(11 / k) : 19.6));
+  }
+  for (let r = 0; r < 2; r++) for (let i = m - 1; i >= 0; i--) { const j = (i + 1) % m; vl[i] = Math.min(vl[i], Math.sqrt(vl[j] * vl[j] + 14 * (s[i + 1] - s[i]))); }
+  const idx = sv => { let lo = 0, hi = m - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (s[mid] <= sv) lo = mid; else hi = mid - 1; } return lo; };
+  return {
+    L,
+    lim(sv) { return vl[idx(sv)]; },
+    pos(sv) { const i = idx(sv), j = (i + 1) % m, f = (sv - s[i]) / ((s[i + 1] - s[i]) || 1); return [x[i] + (x[j] - x[i]) * f, y[i] + (y[j] - y[i]) * f]; }
+  };
+}
+function Sim(seed) {
+  const rnd = mulberry32(seed), tr = buildTrack(), lat0 = 51.2, lon0 = 4.9, cl = Math.cos(lat0 * RAD);
+  let s = tr.L * 0.62, v = 0, t = 0, f = 0.92, driven = 0, nx = 0, ny = 0, hd = null;
+  const head = sv => { const a = tr.pos(sv), b = tr.pos((sv + 1) % tr.L); return Math.atan2(b[1] - a[1], b[0] - a[0]); };
+  this.next = () => {
+    const cool = driven > tr.L * 6.5, halt = driven > tr.L * 6.72, mot = [];
+    let ag = 0, ay = 0;
+    for (let k = 0; k < 10; k++) {
+      let tgt = tr.lim(s) * f; if (cool) tgt = Math.min(tgt, 7); if (halt) tgt = 0;
+      const a = tgt > v ? Math.min(3.2 * (1 - v / 25), (tgt - v) / 0.1) : Math.max(-7, (tgt - v) / 0.1);
+      v = Math.max(0, v + a * 0.1);
+      const ds = v * 0.1; s += ds; driven += ds;
+      if (s >= tr.L) { s -= tr.L; f = 0.9 + rnd() * 0.1; }
+      const h = head(s); let dh = hd === null ? 0 : h - hd; hd = h;
+      if (dh > Math.PI) dh -= 2 * Math.PI; else if (dh < -Math.PI) dh += 2 * Math.PI;
+      const yaw = dh / 0.1;                                // what the phone's sensors would feel
+      ag += Math.hypot(v * yaw, v > 0.05 ? a : 0) / 9.81 / 2; ay += yaw / RAD / 2;
+      if (k % 2 === 1) { mot.push([Math.max(0, ag + (rnd() - 0.5) * 0.06), ay + (rnd() - 0.5) * 3]); ag = 0; ay = 0; }
+      t += 0.1;
+    }
+    const p = tr.pos(s);
+    nx = nx * 0.85 + (rnd() - 0.5) * 3; ny = ny * 0.85 + (rnd() - 0.5) * 3;
+    return {
+      t: Math.round(t * 1000), lat: lat0 + (p[1] + ny) / R / RAD, lon: lon0 + (p[0] + nx) / (R * cl) / RAD,
+      v: Math.max(0, v + (v > 0.3 ? (rnd() - 0.5) * 0.4 : 0)), acc: 4 + rnd() * 3, mot, done: halt && v < 0.05
+    };
+  };
+}
+function demoSession(indoor) {
+  const sim = new Sim(11), pts = [], g = [], y = [];
+  for (let k = 0; k < 1500; k++) {
+    const f = sim.next();
+    if (!indoor) pts.push([f.t, +f.lat.toFixed(7), +f.lon.toFixed(7), +f.v.toFixed(2), Math.round(f.acc)]);
+    f.mot.forEach(m => { g.push(Math.round(m[0] * 100)); y.push(Math.round(m[1])); });
+    if (f.done) break;
+  }
+  return { id: 'demo', demo: true, indoor: !!indoor, start: Date.now(), pts, mot: { dt: 200, g, y } };
+}
+const simGeo = {
+  watchPosition(ok) {
+    const sim = new Sim(Date.now() & 0xffff), t0 = rec ? rec.wall0 : Date.now();
+    return setInterval(() => {
+      const f = sim.next(); if (f.done) return;
+      f.mot.forEach((m, k) => motionSample(f.t - 1000 + k * 200, m[0], m[1]));
+      if (!INDOOR) ok({ timestamp: t0 + f.t, coords: { latitude: f.lat, longitude: f.lon, speed: f.v, accuracy: f.acc } });
+    }, 1000 / SIM_RATE);
+  },
+  clearWatch(id) { clearInterval(id); }
+};
+const geo = SIM ? simGeo : navigator.geolocation;
+
+/* ---------- analysis: stats + automatic lap detection ---------- */
+function analyzeGps(sess, A) {
+  const p = sess.pts, n = A.n, { X, Y, T, V } = A;
+  const lat0 = p[0][1], lon0 = p[0][2], cl = Math.cos(lat0 * RAD), accs = [];
+  for (let i = 0; i < n; i++) {
+    T[i] = p[i][0] / 1000; Y[i] = (p[i][1] - lat0) * RAD * R; X[i] = (p[i][2] - lon0) * RAD * R * cl;
+    V[i] = p[i][3] || 0; accs.push(p[i][4] || 0);
+  }
+  // one-sample spikes are GPS glitches, not kart physics
+  for (let i = 1; i < n - 1; i++) { const a = V[i - 1], b = V[i], c = V[i + 1]; if ((b - a > 8 && b - c > 8) || (a - b > 8 && c - b > 8)) V[i] = (a + c) / 2; }
+  for (let i = 0; i < n; i++) if (V[i] > A.top) { A.top = V[i]; A.topI = i; }
+  for (let i = 1; i < n; i++) {
+    const dt = T[i] - T[i - 1];
+    if (dt > 5) { A.gaps++; continue; }
+    if (dt <= 0) continue;
+    const va = (V[i] + V[i - 1]) / 2;
+    if (va > 1.4) { A.dist += va * dt; A.moving += dt; }
+  }
+  accs.sort((a, b) => a - b); A.acc = accs[n >> 1];
+
+  // start/finish gate: the fastest point of the session (or the point the driver picked)
+  let gi = sess.gateIdx;
+  if (!(gi >= 1 && gi < n - 1)) {
+    gi = -1; let bv = 4;
+    for (let i = 1; i < n - 1; i++) { if (T[i + 1] - T[i - 1] > 4) continue; const vs = (V[i - 1] + V[i] + V[i + 1]) / 3; if (vs > bv) { bv = vs; gi = i; } }
+  }
+  if (gi < 1) return;
+  let dx = X[gi + 1] - X[gi - 1], dy = Y[gi + 1] - Y[gi - 1];
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return;
+  dx /= len; dy /= len;
+  const gx = X[gi], gy = Y[gi];
+  A.gate = { i: gi, x: gx, y: gy, dx, dy };
+  let last = -1e9;
+  for (let i = 1; i < n; i++) {
+    const dt = T[i] - T[i - 1];
+    if (dt <= 0 || dt > 4) continue;
+    const sa = (X[i - 1] - gx) * dx + (Y[i - 1] - gy) * dy, sb = (X[i] - gx) * dx + (Y[i] - gy) * dy;
+    if (!(sa < 0 && sb >= 0)) continue;
+    const f = sa / (sa - sb);
+    const cx = X[i - 1] + f * (X[i] - X[i - 1]), cy = Y[i - 1] + f * (Y[i] - Y[i - 1]);
+    if (Math.abs((cx - gx) * -dy + (cy - gy) * dx) > 12) continue;          // not on this piece of track
+    const sx = X[i] - X[i - 1], sy = Y[i] - Y[i - 1], sl = Math.hypot(sx, sy);
+    if (sl < 0.5 || (sx * dx + sy * dy) / sl < 0.7) continue;                // wrong direction
+    const tc = T[i - 1] + f * dt;
+    if (tc - last < 10) continue;
+    A.cross.push(tc); last = tc;
+  }
+  for (let k = 0; k + 1 < A.cross.length; k++) A.laps.push({ n: k + 1, t0: A.cross[k], t1: A.cross[k + 1], time: A.cross[k + 1] - A.cross[k], est: false });
+}
+// Indoors there is no GPS, but every lap has the same sequence of corners. The turn rate from the
+// gyroscope therefore repeats once per lap: find that period, then match one lap against the rest.
+function motionLaps(Y, dt) {
+  const N = Y.length, none = { cross: [], period: 0 };
+  const minL = Math.round(12 / dt), maxL = Math.min(Math.round(100 / dt), Math.floor(N / 2.2));
+  if (maxL <= minL + 2) return none;
+  let mean = 0; for (let i = 0; i < N; i++) mean += Y[i]; mean /= N;
+  const z = new Float32Array(N); for (let i = 0; i < N; i++) z[i] = Y[i] - mean;
+  const r = new Float32Array(maxL + 1); let rmax = 0;
+  for (let L = minL; L <= maxL; L++) {
+    let ab = 0, aa = 0, bb = 0;
+    for (let i = 0; i + L < N; i++) { const a = z[i], b = z[i + L]; ab += a * b; aa += a * a; bb += b * b; }
+    r[L] = aa > 0 && bb > 0 ? ab / Math.sqrt(aa * bb) : 0; if (r[L] > rmax) rmax = r[L];
+  }
+  if (rmax < 0.3) return none;
+  let P = 0;
+  for (let L = minL + 1; L < maxL; L++) if (r[L] >= 0.85 * rmax && r[L] >= r[L - 1] && r[L] >= r[L + 1]) { P = L; break; }
+  if (!P) return none;
+  const M = P, pre = new Float64Array(N + 1), pre2 = new Float64Array(N + 1);
+  for (let i = 0; i < N; i++) { pre[i + 1] = pre[i] + Y[i]; pre2[i + 1] = pre2[i] + Y[i] * Y[i]; }
+  const nCand = Math.max(1, Math.min(24, Math.floor((N - M) / (M / 2)) + 1));
+  let best = null;
+  for (let c = 0; c < nCand; c++) {
+    const s0 = nCand > 1 ? Math.round(c * (N - M) / (nCand - 1)) : 0;
+    const tm = (pre[s0 + M] - pre[s0]) / M, tv = pre2[s0 + M] - pre2[s0] - M * tm * tm;
+    if (tv < M * 25) continue;                             // standing still: nothing to match on
+    const cc = new Float32Array(N - M + 1);
+    for (let o = 0; o <= N - M; o++) {
+      const wm = (pre[o + M] - pre[o]) / M, wv = pre2[o + M] - pre2[o] - M * wm * wm;
+      if (wv < M * 25) continue;
+      let d = 0; for (let i = 0; i < M; i++) d += Y[s0 + i] * Y[o + i];
+      cc[o] = (d - M * tm * wm) / Math.sqrt(tv * wv);
+    }
+    const peaks = [];
+    for (let o = 1; o < N - M; o++) if (cc[o] >= 0.55 && cc[o] >= cc[o - 1] && cc[o] > cc[o + 1]) peaks.push(o);
+    peaks.sort((a, b) => cc[b] - cc[a]);
+    const chosen = []; let score = 0;
+    peaks.forEach(o => { if (chosen.every(q => Math.abs(q - o) >= 0.75 * M)) { chosen.push(o); score += cc[o]; } });
+    if (!best || score > best.score) {
+      chosen.sort((a, b) => a - b);
+      best = { score, cross: chosen.map(o => { const a = cc[o - 1], b = cc[o], c2 = cc[o + 1], den = a - 2 * b + c2; return (o + (den ? 0.5 * (a - c2) / den : 0)) * dt; }) };
+    }
+  }
+  return best && best.cross.length >= 2 ? { cross: best.cross, period: P * dt } : none;
+}
+function analyze(sess) {
+  const p = sess.pts || [], n = p.length;
+  const A = { n, X: new Float64Array(n), Y: new Float64Array(n), T: new Float64Array(n), V: new Float64Array(n),
+    laps: [], cross: [], gate: null, top: 0, topI: 0, dist: 0, moving: 0, dur: 0, gaps: 0, best: -1, acc: 0,
+    hasGps: false, mot: null, maxG: 0, maxGT: 0, lapSrc: '' };
+  const { T, V } = A;
+  if (n >= 2) analyzeGps(sess, A);
+  A.hasGps = n >= 5 && A.top > 1.4 && A.acc <= 30;
+  if (!A.hasGps) { A.laps = []; A.cross = []; A.gate = null; A.gaps = 0; }
+  if (A.laps.length) A.lapSrc = 'gps';
+  const m = sess.mot;
+  if (m && m.g && m.g.length >= 50) {
+    const N = m.g.length, dt = m.dt / 1000, G = new Float32Array(N), Yw = new Float32Array(N);
+    for (let i = 0; i < N; i++) { G[i] = m.g[i] / 100; Yw[i] = m.y[i]; }
+    A.mot = { G, dt, N };
+    if (!A.laps.length) {
+      const ml = motionLaps(Yw, dt);
+      for (let k = 0; k + 1 < ml.cross.length; k++) {
+        const d = ml.cross[k + 1] - ml.cross[k];
+        if (d >= 0.85 * ml.period && d <= 1.35 * ml.period) A.laps.push({ n: A.laps.length + 1, t0: ml.cross[k], t1: ml.cross[k + 1], time: d, est: true });
+      }
+      A.cross = ml.cross;
+      if (A.laps.length) A.lapSrc = 'mot';
+    }
+  }
+  A.dur = Math.max(n ? T[n - 1] : 0, A.mot ? A.mot.N * A.mot.dt : 0);
+  A.laps.forEach(l => {                                    // per-lap extremes, and which GPS points belong to it
+    l.top = 0; l.maxG = 0; l.broken = false; l.i0 = -1; l.i1 = -1;
+    for (let i = 0; i < n; i++) {
+      if (T[i] < l.t0) continue;
+      if (T[i] > l.t1) break;
+      if (l.i0 < 0) l.i0 = i;
+      l.i1 = i;
+      if (V[i] > l.top) l.top = V[i];
+      if (!l.est && i > 0 && T[i - 1] >= l.t0 && T[i] - T[i - 1] > 5) l.broken = true;
+    }
+    if (l.i0 < 0) { l.i0 = 0; l.i1 = Math.max(0, n - 1); if (!l.est) l.broken = true; }
+    if (A.mot) for (let i = Math.ceil(l.t0 / A.mot.dt); i <= l.t1 / A.mot.dt && i < A.mot.N; i++) if (A.mot.G[i] > l.maxG) l.maxG = A.mot.G[i];
+  });
+  let bt = Infinity;
+  A.laps.forEach((l, k) => { if (!l.broken && l.time < bt) { bt = l.time; A.best = k; } });
+  if (A.mot) {                                             // ignore the phone being handled before and after driving
+    const { G, dt, N } = A.mot, L = A.laps;
+    let a = L.length ? Math.ceil(L[0].t0 / dt) : Math.round(20 / dt), b = L.length ? Math.floor(L[L.length - 1].t1 / dt) : N - 1 - Math.round(10 / dt);
+    if (!(b > a)) { a = 0; b = N - 1; }
+    for (let i = Math.max(0, a); i <= Math.min(N - 1, b); i++) if (G[i] > A.maxG) { A.maxG = G[i]; A.maxGT = i * dt; }
+  }
+  return A;
+}
+
+/* ---------- sessions ---------- */
+function saveSession(sess) {
+  const A = analyze(sess);
+  const ok = store.set(LS_SESSION + sess.id, { id: sess.id, start: sess.start, pts: sess.pts, mot: sess.mot, gateIdx: sess.gateIdx, len: sess.len });
+  const idx = store.get(LS_INDEX, []).filter(e => e.id !== sess.id);
+  idx.push({ id: sess.id, start: sess.start, dur: A.dur, top: A.hasGps ? A.top : 0, maxG: A.maxG, laps: A.laps.length, best: A.best >= 0 ? A.laps[A.best].time : null });
+  idx.sort((a, b) => b.start - a.start);
+  store.set(LS_INDEX, idx);
+  return ok;
+}
+function renderHome() {
+  const list = $('list'), idx = store.get(LS_INDEX, []);
+  list.textContent = '';
+  if (!idx.length) {
+    const e = document.createElement('p'); e.className = 'empty';
+    e.textContent = 'Nog geen ritten. Na je eerste opname staat hij hier, met snelheid, G-krachten en rondetijden.';
+    list.appendChild(e); return;
+  }
+  idx.forEach(e => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'sess';
+    const d = document.createElement('span'); d.className = 'd'; d.textContent = dateFmt.format(new Date(e.start));
+    const m = document.createElement('span'); m.className = 'm';
+    m.textContent = (e.laps ? e.laps + (e.laps === 1 ? ' ronde' : ' rondes') + (e.best ? ' · snelste ' + fmtLap(e.best) : '') + ' · ' : '') + fmtClock(e.dur) + ' min';
+    const v = document.createElement('span'); v.className = 'v'; v.textContent = e.top ? nf0.format(e.top * KMH) : e.maxG ? nf1.format(e.maxG) : '–';
+    const u = document.createElement('small'); u.textContent = e.top ? 'km/h' : e.maxG ? 'g' : ''; v.appendChild(u);
+    b.append(d, v, m);
+    b.addEventListener('click', () => {
+      const s = store.get(LS_SESSION + e.id, null);
+      if (s && s.pts) openSession(s); else notice('Deze rit kon niet worden geladen.');
+    });
+    list.appendChild(b);
+  });
+}
+function show(view) {
+  $('home').hidden = view !== 'home'; $('result').hidden = view !== 'result';
+  if (view === 'home') renderHome();
+  window.scrollTo(0, 0);
+}
+
+/* ---------- recording ---------- */
+let rec = null, wake = null, relockTimer = 0, mo = null;
+const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 };
+
+function setGps(txt, cls) { $('recGpsTxt').textContent = txt; $('recGps').className = 'rec-gps ' + (cls || ''); }
+function updState() {
+  if (!rec) return;
+  const wakeOn = !!(wake && !wake.released), waited = Date.now() - rec.wall0, hasMot = rec.mot.g.length > 5;
+  let msg;
+  if (rec.pts.length) msg = 'Opname loopt. Stop je telefoon nu in een dichte zak.';
+  else if (waited < 25000) msg = 'GPS zoeken… Buiten duurt dat een paar tellen.';
+  else if (hasMot) msg = 'Geen GPS-ontvangst hier. De bewegingssensor meet wel door: G-krachten en geschatte rondetijden. Je kunt hem wegstoppen.';
+  else msg = 'Geen GPS-ontvangst en geen bewegingssensor. Zo wordt er niets gemeten.';
+  if (!wakeOn && waited > 3000) msg += ' Let op: je scherm kan uitgaan en dan stopt de meting. Zet Automatisch slot op Nooit.';
+  $('recState').textContent = msg;
+}
+async function acquireWake() {
+  if (!('wakeLock' in navigator)) return;
+  if (wake && !wake.released) return;
+  try { wake = await navigator.wakeLock.request('screen'); } catch (e) { wake = null; }
+}
+function releaseWake() { try { if (wake) wake.release(); } catch (e) {} wake = null; }
+function saveActive() { if (rec && (rec.pts.length || rec.mot.g.length)) store.set(LS_ACTIVE, { id: rec.id, start: rec.t0, pts: rec.pts, mot: rec.mot }); }
+
+// One motion sample per 0.2 s: g = sideways + forward/back force, yaw = turn rate around the vertical (deg/s).
+function motionSample(tMs, g, yaw) {
+  if (!rec) return;
+  const m = rec.mot, idx = Math.floor(tMs / m.dt);
+  if (idx < m.g.length || idx > 36000 || idx - m.g.length > 9000) return;
+  while (m.g.length < idx) { m.g.push(0); m.y.push(0); }
+  m.g.push(Math.round(g * 100)); m.y.push(Math.round(yaw));
+  if (g > rec.maxG && m.g.length > 25) { rec.maxG = g; $('recG').textContent = nf1.format(g); }
+}
+function onMotion(e) {
+  if (!rec || SIM) return;
+  const ag = e.accelerationIncludingGravity, a = e.acceleration, rr = e.rotationRate;
+  if (!ag || ag.x == null) return;
+  const now = performance.now();
+  if (!mo) mo = { t: now, gx: ag.x, gy: ag.y, gz: ag.z, hx: 0, hy: 0, hz: 0, yaw: 0 };
+  const dt = Math.min(0.2, Math.max(0.001, (now - mo.t) / 1000)); mo.t = now;
+  const lin = !!(a && a.x != null);                        // the phone already separates gravity when it has a gyroscope
+  const kg = 1 - Math.exp(-dt / (lin ? 0.5 : 1.5));
+  mo.gx += ((lin ? ag.x - a.x : ag.x) - mo.gx) * kg; mo.gy += ((lin ? ag.y - a.y : ag.y) - mo.gy) * kg; mo.gz += ((lin ? ag.z - a.z : ag.z) - mo.gz) * kg;
+  const gn = Math.hypot(mo.gx, mo.gy, mo.gz); if (gn < 3) return;
+  const ux = mo.gx / gn, uy = mo.gy / gn, uz = mo.gz / gn;
+  const lx = lin ? a.x : ag.x - mo.gx, ly = lin ? a.y : ag.y - mo.gy, lz = lin ? a.z : ag.z - mo.gz;
+  const d = lx * ux + ly * uy + lz * uz, kh = 1 - Math.exp(-dt / 0.35);
+  // smooth the horizontal force as a vector, so engine vibration cancels out instead of adding up
+  mo.hx += (lx - d * ux - mo.hx) * kh; mo.hy += (ly - d * uy - mo.hy) * kh; mo.hz += (lz - d * uz - mo.hz) * kh;
+  if (rr && rr.alpha != null) mo.yaw += ((rr.beta || 0) * ux + (rr.gamma || 0) * uy + rr.alpha * uz - mo.yaw) * (1 - Math.exp(-dt / 0.3));
+  motionSample(Date.now() - rec.wall0, Math.hypot(mo.hx, mo.hy, mo.hz) / 9.81, mo.yaw);
+}
+function startMotion() {                                    // iOS only hands out motion data after a tap + permission
+  mo = null;
+  if (SIM || typeof DeviceMotionEvent === 'undefined') return Promise.resolve();
+  const attach = () => window.addEventListener('devicemotion', onMotion);
+  if (typeof DeviceMotionEvent.requestPermission !== 'function') { attach(); return Promise.resolve(); }
+  let p;
+  try { p = DeviceMotionEvent.requestPermission(); } catch (e) { return Promise.resolve(); }
+  return p.then(r => { if (r === 'granted') attach(); }).catch(() => {});
+}
+
+function onFix(pos) {
+  if (!rec) return;
+  const c = pos.coords, now = Date.now();
+  let ts = pos.timestamp;
+  if (!SIM && (!(ts > 0) || Math.abs(ts - now) > 120000)) ts = now;
+  rec.lastWall = now;
+  const acc = c.accuracy || 0;
+  setGps('GPS ±' + Math.round(acc) + ' m', acc <= 10 ? 'good' : acc <= 25 ? 'fair' : 'bad');
+  if (rec.last && ts <= rec.last.ts) return;
+  let v = (typeof c.speed === 'number' && c.speed >= 0) ? c.speed : null;
+  // without a satellite speed, only trust position differences when both fixes are precise
+  if (v === null && rec.last && acc <= 15 && rec.last.acc <= 15) { const dt = (ts - rec.last.ts) / 1000; if (dt > 0.3 && dt < 5) v = dist(rec.last.lat, rec.last.lon, c.latitude, c.longitude) / dt; }
+  if (v === null) v = 0;
+  $('recSpeed').textContent = Math.round(v * KMH);
+  if (acc > 50) return;                                   // too imprecise to keep
+  if (rec.last) {
+    const dt = (ts - rec.last.ts) / 1000;
+    if (dt > 0 && dt <= 5) { const va = (v + rec.last.v) / 2; if (va > 1.4) rec.dist += va * dt; }
+    if (acc <= 20 && v > rec.top && v - rec.last.v < 8) rec.top = v;
+  }
+  rec.last = { ts, lat: c.latitude, lon: c.longitude, v, acc };
+  rec.pts.push([Math.max(0, ts - rec.t0), +c.latitude.toFixed(7), +c.longitude.toFixed(7), +v.toFixed(2), Math.round(acc)]);
+  $('recTop').textContent = Math.round(rec.top * KMH);
+  $('recDist').textContent = nf2.format(rec.dist / 1000);
+  $('recPts').textContent = rec.pts.length;
+}
+function onGeoError(err) {
+  if (!rec) return;
+  if (err && err.code === 1) setGps('Locatie geweigerd', 'bad');
+  else if (!rec.pts.length) setGps('GPS zoeken…', '');
+}
+function startWatch() {
+  if (!rec) return;
+  if (rec.watch != null) geo.clearWatch(rec.watch);
+  rec.watch = geo.watchPosition(onFix, onGeoError, GEO_OPTS);
+}
+function tick() {
+  if (!rec) return;
+  $('recTime').textContent = fmtClock((SIM ? rec.mot.g.length * rec.mot.dt : Date.now() - rec.wall0) / 1000);
+  if (rec.lastWall && Date.now() - rec.lastWall > 6000) setGps('GPS-signaal kwijt', 'bad');
+  else if (!rec.lastWall && Date.now() - rec.wall0 > 25000) setGps('Geen GPS', 'bad');
+  updState();
+  if (++rec.ticks % 5 === 0) { saveActive(); if (!(wake && !wake.released)) acquireWake(); }
+}
+function lock() {
+  clearTimeout(relockTimer);
+  $('lockUi').hidden = false; $('unlockUi').hidden = true;
+}
+function unlock() {
+  $('lockUi').hidden = true; $('unlockUi').hidden = false;
+  clearTimeout(relockTimer); relockTimer = setTimeout(lock, 10000);
+}
+function start() {
+  if (rec) return;
+  notice('');
+  if (!SIM && (!('geolocation' in navigator) || !window.isSecureContext)) {
+    notice('Meten werkt alleen als je deze pagina via het https-adres in Safari opent. Binnen een andere app of zonder https worden locatie en beweging geblokkeerd.');
+    return;
+  }
+  const now = Date.now();
+  rec = { id: String(now), wall0: now, t0: now, pts: [], mot: { dt: 200, g: [], y: [] }, top: 0, dist: 0, maxG: 0, last: null, lastWall: 0, watch: null, ticks: 0, timer: 0 };
+  ['recSpeed', 'recTop', 'recPts'].forEach(id => { $(id).textContent = '0'; });
+  $('recDist').textContent = '0,00'; $('recTime').textContent = '0:00'; $('recG').textContent = '–';
+  setGps('GPS zoeken…', '');
+  $('rec').hidden = false; document.body.classList.add('locked');
+  lock(); updState(); acquireWake();
+  rec.timer = setInterval(tick, 1000);
+  startMotion().then(startWatch);                          // one permission question at a time
+}
+function finish() {
+  if (!rec) return;
+  const r = rec; rec = null;
+  if (r.watch != null) geo.clearWatch(r.watch);
+  window.removeEventListener('devicemotion', onMotion);
+  clearInterval(r.timer); clearTimeout(relockTimer); releaseWake(); store.del(LS_ACTIVE);
+  $('rec').hidden = true; document.body.classList.remove('locked');
+  const hasMot = r.mot.g.length >= 150;
+  if (r.pts.length < 5 && !hasMot) {
+    show('home');
+    notice('Er is te weinig gemeten om een rit te bewaren: geen GPS en nog geen halve minuut aan beweging. Loop de checklist na en probeer het opnieuw.');
+    return;
+  }
+  const sess = { id: r.id, start: r.t0, pts: r.pts };
+  if (r.mot.g.length >= 50) sess.mot = r.mot;
+  const ok = saveSession(sess);
+  openSession(sess);
+  if (!ok) showWarn('De rit kon niet worden opgeslagen omdat de opslag vol is. Deel hem nu als bestand of verwijder oude ritten.');
+}
+document.addEventListener('visibilitychange', () => {
+  if (!rec) return;
+  if (document.visibilityState === 'visible') { if (!SIM) startWatch(); acquireWake(); } else saveActive();
+});
+window.addEventListener('pagehide', saveActive);
+
+// The recording screen swallows every touch except the slider and its buttons.
+$('rec').addEventListener('touchstart', e => { if (!e.target.closest('button')) e.preventDefault(); }, { passive: false });
+$('rec').addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+$('rec').addEventListener('contextmenu', e => e.preventDefault());
+$('unlockUi').addEventListener('pointerdown', () => { clearTimeout(relockTimer); relockTimer = setTimeout(lock, 10000); });
+(() => {
+  const kn = $('knob'), sl = $('lockUi');
+  let sx = 0, max = 0, x = 0, on = false;
+  const reset = () => { on = false; x = 0; kn.style.transition = ''; kn.style.transform = ''; };
+  kn.addEventListener('pointerdown', e => { on = true; sx = e.clientX; x = 0; max = sl.clientWidth - kn.offsetWidth - 8; try { kn.setPointerCapture(e.pointerId); } catch (err) {} kn.style.transition = 'none'; });
+  kn.addEventListener('pointermove', e => { if (!on) return; x = Math.max(0, Math.min(max, e.clientX - sx)); kn.style.transform = 'translateX(' + x + 'px)'; });
+  kn.addEventListener('pointerup', () => { const done = on && max > 0 && x > max * 0.85; reset(); if (done) unlock(); });
+  kn.addEventListener('pointercancel', reset);
+  kn.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); unlock(); } });
+})();
+$('startBtn').addEventListener('click', start);
+$('stopBtn').addEventListener('click', finish);
+$('relockBtn').addEventListener('click', lock);
+
+/* ---------- result view ---------- */
+const ui = { sess: null, A: null, sel: -1, hoverT: null, hoverI: -1, gateMode: false, raf: 0 };
+let mapGeom = null;
+const RAMP = ['#184f95', '#256abf', '#3987e5', '#6da7ec', '#9ec5f4', '#cde2fb'].map(h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]);
+function ramp(u) {
+  u = Math.max(0, Math.min(1, u)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(u)), f = u - i, a = RAMP[i], b = RAMP[i + 1];
+  return 'rgb(' + Math.round(a[0] + (b[0] - a[0]) * f) + ',' + Math.round(a[1] + (b[1] - a[1]) * f) + ',' + Math.round(a[2] + (b[2] - a[2]) * f) + ')';
+}
+function showWarn(msg) { const w = $('resWarn'); w.textContent = msg || ''; w.hidden = !msg; }
+function selRange() {
+  const A = ui.A, lap = ui.sel >= 0 ? A.laps[ui.sel] : null;
+  const i0 = lap ? lap.i0 : 0, i1 = lap ? lap.i1 : A.n - 1;
+  let vmin = Infinity, vmax = 0;
+  for (let i = i0; i <= i1; i++) { if (A.V[i] < vmin) vmin = A.V[i]; if (A.V[i] > vmax) vmax = A.V[i]; }
+  if (!(vmax - vmin > 0.5)) { vmin = 0; vmax = Math.max(1, vmax); }
+  return { lap, i0, i1, vmin, vmax };
+}
+function nearestByTime(t) { const T = ui.A.T; let lo = 0, hi = T.length - 1; if (hi < 0) return -1; while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < t) lo = mid + 1; else hi = mid; } return lo > 0 && t - T[lo - 1] < T[lo] - t ? lo - 1 : lo; }
+function setupCanvas(cv) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1), w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+function dot(ctx, x, y, r, fill) {
+  ctx.beginPath(); ctx.arc(x, y, r + 2, 0, 6.2832); ctx.fillStyle = C.surface; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fillStyle = fill; ctx.fill();
+}
+function drawMap() {
+  const { ctx, w, h } = setupCanvas($('map')), A = ui.A, { X, Y, T, V, n } = A;
+  if (n < 2 || !w) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) { if (X[i] < minX) minX = X[i]; if (X[i] > maxX) maxX = X[i]; if (Y[i] < minY) minY = Y[i]; if (Y[i] > maxY) maxY = Y[i]; }
+  const pad = 26, sc = Math.min((w - 2 * pad) / Math.max(5, maxX - minX), (h - 2 * pad) / Math.max(5, maxY - minY));
+  const ox = (w - (maxX - minX) * sc) / 2, oy = (h - (maxY - minY) * sc) / 2;
+  const fx = x => ox + (x - minX) * sc, fy = y => h - oy - (y - minY) * sc;
+  const px = i => fx(X[i]), py = i => fy(Y[i]);
+  mapGeom = { px, py };
+  const { lap, i0, i1, vmin, vmax } = selRange();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (lap) {                                              // the rest of the session, quietly
+    ctx.strokeStyle = C.axis; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 1; i < n; i++) { if (T[i] - T[i - 1] > 5) continue; ctx.moveTo(px(i - 1), py(i - 1)); ctx.lineTo(px(i), py(i)); }
+    ctx.stroke();
+  }
+  ctx.lineWidth = 4;
+  const a = Math.max(1, lap ? i0 : 1), b = Math.min(n - 1, lap ? i1 + 1 : n - 1);
+  for (let i = a; i <= b; i++) {
+    if (T[i] - T[i - 1] > 5) continue;
+    ctx.strokeStyle = ramp(((V[i] + V[i - 1]) / 2 - vmin) / (vmax - vmin));
+    ctx.beginPath(); ctx.moveTo(px(i - 1), py(i - 1)); ctx.lineTo(px(i), py(i)); ctx.stroke();
+  }
+  ctx.font = '11px ' + CANVAS_FONT; ctx.textBaseline = 'middle';
+  if (A.gate) {                                           // start/finish line, square to the track
+    const gx = fx(A.gate.x), gy = fy(A.gate.y), ux = A.gate.dy, uy = A.gate.dx;
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 3; ctx.lineCap = 'butt';
+    ctx.beginPath(); ctx.moveTo(gx - ux * 10, gy - uy * 10); ctx.lineTo(gx + ux * 10, gy + uy * 10); ctx.stroke();
+    const side = ((gx + ux * 22 - w / 2) ** 2 + (gy + uy * 22 - h / 2) ** 2) > ((gx - ux * 22 - w / 2) ** 2 + (gy - uy * 22 - h / 2) ** 2) ? 1 : -1;
+    ctx.fillStyle = C['ink-2']; ctx.textAlign = 'center';
+    ctx.fillText('S/F', Math.max(14, Math.min(w - 14, gx + ux * 22 * side)), Math.max(10, Math.min(h - 10, gy + uy * 22 * side)));
+  }
+  const bars = [10, 20, 50, 100, 200, 500, 1000];        // scale bar
+  let bl = bars[0]; bars.forEach(v => { if (v * sc <= 96) bl = v; });
+  const bx = 14, by = h - 14;
+  ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.lineCap = 'butt'; ctx.beginPath();
+  ctx.moveTo(bx + 0.5, by - 4); ctx.lineTo(bx + 0.5, by + 0.5); ctx.lineTo(bx + bl * sc + 0.5, by + 0.5); ctx.lineTo(bx + bl * sc + 0.5, by - 4); ctx.stroke();
+  ctx.fillStyle = C.muted; ctx.textAlign = 'left'; ctx.fillText(bl + ' m', bx + bl * sc + 7, by - 2);
+  ctx.textAlign = 'right'; ctx.fillText('N ↑', w - 12, 14);
+  if (ui.hoverI >= 0) dot(ctx, px(ui.hoverI), py(ui.hoverI), 5, C.ink);
+}
+// One time-series chart; used for speed (GPS) and for G-force (motion sensor), on the same time axis.
+function drawSeries(cv, o) {
+  const { ctx, w, h } = setupCanvas(cv), A = ui.A;
+  if (o.n < 2 || !w) return;
+  const mL = 34, mR = 12, mT = 26, mB = 24, pw = w - mL - mR, ph = h - mT - mB, t1 = Math.max(1, A.dur);
+  const yMax = Math.max(o.step, Math.ceil(o.top * 1.05 / o.step - 1e-9) * o.step);
+  const xs = t => mL + t / t1 * pw, ys = v => mT + ph - Math.min(v, yMax * 1.08) / yMax * ph;
+  cv._g = { mL, pw, t1 };
+  const lap = ui.sel >= 0 ? A.laps[ui.sel] : null;
+  if (lap) { ctx.fillStyle = 'rgba(240,239,236,0.07)'; ctx.fillRect(xs(lap.t0), mT, xs(lap.t1) - xs(lap.t0), ph); }
+  ctx.font = '11px ' + CANVAS_FONT; ctx.lineWidth = 1; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+  for (let k = 0; k <= yMax + 1e-9; k += o.step) {
+    const y = Math.round(ys(k)) + 0.5;
+    ctx.strokeStyle = k === 0 ? C.axis : C.line; ctx.beginPath(); ctx.moveTo(mL, y); ctx.lineTo(w - mR, y); ctx.stroke();
+    ctx.fillStyle = C.muted; ctx.fillText(nfT.format(k), mL - 7, y);
+  }
+  const xt = [10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].find(c => t1 / c <= 5) || 7200;
+  ctx.textBaseline = 'top';
+  for (let t = 0; t <= t1; t += xt) { const x = xs(t); ctx.textAlign = x > w - 22 ? 'right' : 'center'; ctx.fillText(fmtClock(t), x, mT + ph + 7); }
+  ctx.strokeStyle = C.axis;                               // lap boundaries: short ticks on the baseline
+  A.cross.forEach(tc => { const x = Math.round(xs(tc)) + 0.5; ctx.beginPath(); ctx.moveTo(x, mT + ph - 6); ctx.lineTo(x, mT + ph + 4); ctx.stroke(); });
+  const segs = []; let cur = [];
+  for (let i = 0; i < o.n; i++) { if (i > 0 && o.t(i) - o.t(i - 1) > 5) { segs.push(cur); cur = []; } cur.push(i); }
+  segs.push(cur);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  segs.forEach(sg => {
+    if (sg.length < 2) return;
+    ctx.beginPath(); ctx.moveTo(xs(o.t(sg[0])), ys(0));
+    sg.forEach(i => ctx.lineTo(xs(o.t(i)), ys(o.y(i))));
+    ctx.lineTo(xs(o.t(sg[sg.length - 1])), ys(0)); ctx.closePath();
+    ctx.fillStyle = 'rgba(57,135,229,0.12)'; ctx.fill();
+    ctx.beginPath(); sg.forEach((i, k) => { const x = xs(o.t(i)), y = ys(o.y(i)); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+    ctx.strokeStyle = C.data; ctx.lineWidth = o.n > 1500 ? 1.5 : 2; ctx.stroke();
+  });
+  const tx = xs(o.topT), ty = ys(o.top);                  // the one direct label: the peak
+  dot(ctx, tx, ty, 4, C.data);
+  ctx.fillStyle = C.ink; ctx.textBaseline = 'bottom'; ctx.textAlign = tx > w - 70 ? 'right' : tx < mL + 44 ? 'left' : 'center';
+  ctx.fillText(o.topLabel, tx + (ctx.textAlign === 'right' ? 6 : ctx.textAlign === 'left' ? -6 : 0), ty - 9);
+  if (ui.hoverT !== null) {
+    const x = Math.round(xs(ui.hoverT)) + 0.5, v = o.at(ui.hoverT);
+    ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, mT); ctx.lineTo(x, mT + ph); ctx.stroke();
+    if (v !== null) dot(ctx, xs(ui.hoverT), ys(v), 4.5, C.ink);
+  }
+}
+function speedAt(t) { const A = ui.A, i = nearestByTime(t); return i >= 0 && Math.abs(A.T[i] - t) <= 3 ? A.V[i] * KMH : null; }
+function gAt(t) { const m = ui.A.mot; if (!m) return null; const i = Math.round(t / m.dt); return i >= 0 && i < m.N ? m.G[i] : null; }
+function drawCharts() {
+  const A = ui.A;
+  if (A.hasGps) {
+    const topK = A.top * KMH;
+    drawSeries($('chart'), { n: A.n, t: i => A.T[i], y: i => A.V[i] * KMH, top: topK, topT: A.T[A.topI], step: topK <= 45 ? 10 : topK <= 110 ? 20 : 50, topLabel: nf1.format(topK) + ' km/h', at: speedAt });
+  }
+  if (A.mot) {
+    const m = A.mot, g = Math.max(A.maxG, 0.2);
+    drawSeries($('gchart'), { n: m.N, t: i => i * m.dt, y: i => m.G[i], top: g, topT: A.maxGT, step: g <= 1 ? 0.25 : g <= 2.4 ? 0.5 : 1, topLabel: nf2.format(A.maxG) + ' g', at: gAt });
+  }
+}
+function redraw() { if (ui.raf) return; ui.raf = requestAnimationFrame(() => { ui.raf = 0; if (!$('result').hidden && ui.A) { if (ui.A.hasGps) drawMap(); drawCharts(); } }); }
+function lapAt(t) { const A = ui.A; for (let k = 0; k < A.laps.length; k++) if (t >= A.laps[k].t0 && t <= A.laps[k].t1) return A.laps[k].n; return 0; }
+function setReadout(id, value, t, idle) {
+  const ro = $(id); ro.textContent = '';
+  if (value === null) { ro.textContent = t === null ? idle : fmtClock(t); return; }
+  const b = document.createElement('b'); b.textContent = value;
+  const ln = lapAt(t);
+  ro.append(b, fmtClock(t) + (ln ? ' · ronde ' + ln : ''));
+}
+function setHover(t) {
+  const A = ui.A;
+  ui.hoverT = t; ui.hoverI = -1;
+  if (t !== null && A.hasGps) { const i = nearestByTime(t); if (i >= 0 && Math.abs(A.T[i] - t) <= 3) ui.hoverI = i; }
+  const sv = t === null ? null : speedAt(t), gv = t === null ? null : gAt(t);
+  setReadout('readout', sv === null ? null : nf1.format(sv) + ' km/h', t, 'Sleep over de grafiek');
+  setReadout('readoutG', gv === null ? null : nf2.format(gv) + ' g', t, 'Bochten en remmen samen');
+  redraw();
+}
+function updateMeta() {
+  const A = ui.A;
+  if (!A.hasGps) return;
+  const r = selRange();
+  $('mapWhat').textContent = r.lap ? 'Ronde ' + r.lap.n + (ui.sel === A.best ? ', snelste' : '') : 'Hele rit';
+  $('legMin').textContent = nf0.format(r.vmin * KMH); $('legMax').textContent = nf0.format(r.vmax * KMH) + ' km/h';
+  const ab = $('allBtn'); ab.hidden = !A.laps.length;
+  ab.textContent = ui.sel >= 0 ? 'Toon hele rit' : 'Toon snelste ronde';
+  $('gateBtn').textContent = ui.gateMode ? 'Annuleer' : 'Start/finish verplaatsen';
+  $('gateAuto').hidden = !(ui.sess.gateIdx >= 0);
+  $('mapHint').hidden = !ui.gateMode; $('map').classList.toggle('pick', ui.gateMode);
+}
+function renderLaps() {
+  const A = ui.A, tb = $('lapsBody'), best = A.best >= 0 ? A.laps[A.best].time : 0;
+  tb.textContent = '';
+  $('lapsTable').hidden = !A.laps.length; $('noLaps').hidden = !!A.laps.length;
+  A.laps.forEach((l, k) => {
+    const tr = document.createElement('tr'); tr.tabIndex = 0; if (k === ui.sel) tr.className = 'sel';
+    const cells = [String(l.n), fmtLap(l.time), l.broken ? 'onderbroken' : k === A.best ? 'snelste' : '+' + nf1.format(l.time - best),
+      A.hasGps ? nf0.format(l.top * KMH) : l.maxG ? nf2.format(l.maxG) : '–'];
+    cells.forEach((txt, ci) => {
+      const td = document.createElement('td'); td.textContent = txt;
+      if (ci === 1) { td.className = 'strong'; if (k === A.best) { const d = document.createElement('span'); d.className = 'bestdot'; td.prepend(d); } }
+      tr.appendChild(td);
+    });
+    const pick = () => selectLap(k === ui.sel ? -1 : k);
+    tr.addEventListener('click', pick);
+    tr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    tb.appendChild(tr);
+  });
+}
+function selectLap(k) { ui.sel = k; renderLaps(); updateMeta(); setHover(null); }
+function renderResult() {
+  const s = ui.sess, A = ui.A, gps = A.hasGps, mot = !!A.mot, len = +s.len || 0;
+  const lapsTime = A.laps.reduce((a, l) => a + l.time, 0);
+  $('resTitle').textContent = s.demo ? (s.indoor ? 'Voorbeeld zonder GPS' : 'Voorbeeldrit') : dateFmt.format(new Date(s.start));
+  $('resSub').textContent = s.demo ? 'Nagebootste data op een verzonnen baan, zodat je ziet wat je na een rit krijgt.'
+    : 'Duur ' + fmtClock(A.dur) + (gps ? ' · GPS ±' + Math.round(A.acc) + ' m' : ' · zonder GPS');
+  $('heroLabel').textContent = gps ? 'Topsnelheid' : 'Hoogste G-kracht';
+  $('sTop').textContent = gps ? nf1.format(A.top * KMH) : nf2.format(A.maxG);
+  $('heroUnit').textContent = gps ? 'km/h' : 'g';
+  const avg = gps ? (A.moving > 0 ? A.dist / A.moving : 0) : (len && lapsTime ? A.laps.length * len / lapsTime : null);
+  const dst = gps ? A.dist : (len && A.laps.length ? A.laps.length * len : null);
+  setStat('sAvg', avg === null ? '–' : nf1.format(avg * KMH), avg === null ? '' : 'km/h');
+  setStat('sDist', dst === null ? '–' : nf2.format(dst / 1000), dst === null ? '' : 'km');
+  setStat('sTime', fmtClock(gps ? A.moving : lapsTime || A.dur));
+  setStat('sLaps', String(A.laps.length));
+  setStat('sBest', A.best >= 0 ? fmtLap(A.laps[A.best].time) : '–');
+  $('sXLabel').textContent = gps ? (mot ? 'Hoogste G' : 'GPS-marge') : 'Baanlengte';
+  if (gps && mot) setStat('sX', nf2.format(A.maxG), 'g');
+  else if (gps) setStat('sX', '±' + Math.round(A.acc), 'm');
+  else setStat('sX', len ? String(len) : '–', len ? 'm' : '');
+  $('mapSec').hidden = !gps; $('spdSec').hidden = !gps; $('gSec').hidden = !mot;
+  $('lenRow').hidden = gps; $('lenIn').value = len || '';
+  $('gateRow').hidden = !gps;
+  $('lapCol4').textContent = gps ? 'Top' : 'Max g';
+  $('lapNote').textContent = A.lapSrc === 'mot'
+    ? 'Zonder GPS zijn de rondes geschat uit het bochtenpatroon dat zich elke ronde herhaalt. Reken op een paar tienden afwijking en leg ze naast de tijden van de baan.'
+    : gps ? 'De start/finish ligt standaard op je snelste punt. Rondetijden uit telefoon-GPS kloppen op ongeveer 0,2 seconde.' : '';
+  $('noLaps').textContent = gps ? 'Geen volledige rondes gevonden. Verplaats de start/finish naar een punt waar je elke ronde langskomt.'
+    : 'Geen herhalend rondepatroon gevonden. Daarvoor zijn minstens een paar volle rondes achter elkaar nodig.';
+  const warn = [];
+  if (!gps && !s.demo) warn.push('Hier was geen bruikbare GPS-ontvangst, dus er is geen snelheid of route. Wat je ziet komt van de bewegingssensor.');
+  if (A.gaps) warn.push('De opname is ' + A.gaps + ' keer onderbroken (scherm uit, app op de achtergrond of GPS kwijt). Van die stukken is er geen data.');
+  if (gps && A.acc > 15) warn.push('De GPS-ontvangst was matig (±' + Math.round(A.acc) + ' m), dus snelheden en rondetijden zijn minder betrouwbaar.');
+  showWarn(warn.join(' '));
+  $('gpxBtn').hidden = !gps;
+  $('delBtn').hidden = !!s.demo; $('delBtn').textContent = 'Verwijder rit';
+  renderLaps(); updateMeta(); setHover(null);
+}
+function openSession(sess) {
+  ui.sess = sess; ui.A = analyze(sess); ui.sel = ui.A.best; ui.hoverT = null; ui.hoverI = -1; ui.gateMode = false;
+  show('result'); renderResult();
+}
+function reanalyze() {
+  ui.A = analyze(ui.sess); ui.sel = ui.A.best; ui.gateMode = false;
+  if (!ui.sess.demo) saveSession(ui.sess);
+  renderResult();
+}
+function nearestOnMap(e, all) {
+  if (!mapGeom) return -1;
+  const r = $('map').getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, sr = selRange();
+  const a = all ? 1 : sr.i0, b = all ? ui.A.n - 2 : sr.i1;
+  let best = -1, bd = 44 * 44;
+  for (let i = a; i <= b; i++) { const dx = mapGeom.px(i) - x, dy = mapGeom.py(i) - y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } }
+  return best;
+}
+(() => {
+  const mp = $('map');
+  const wire = (cv, snap) => {
+    const on = e => {
+      const g = cv._g; if (!g) return;
+      const r = cv.getBoundingClientRect(); let t = Math.max(0, Math.min(1, (e.clientX - r.left - g.mL) / g.pw)) * g.t1;
+      if (snap) { const i = nearestByTime(t); if (i >= 0) t = ui.A.T[i]; }
+      setHover(t);
+    };
+    cv.addEventListener('pointerdown', on); cv.addEventListener('pointermove', on);
+    cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') setHover(null); });
+  };
+  wire($('chart'), true); wire($('gchart'), false);
+  const onMap = e => { if (ui.gateMode) return; const i = nearestOnMap(e, false); if (i >= 0) setHover(ui.A.T[i]); };
+  mp.addEventListener('pointerdown', onMap); mp.addEventListener('pointermove', onMap);
+  mp.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !ui.gateMode) setHover(null); });
+  mp.addEventListener('click', e => { if (!ui.gateMode) return; const i = nearestOnMap(e, true); if (i >= 1) { ui.sess.gateIdx = i; reanalyze(); } });
+})();
+$('allBtn').addEventListener('click', () => selectLap(ui.sel >= 0 ? -1 : ui.A.best));
+$('gateBtn').addEventListener('click', () => { ui.gateMode = !ui.gateMode; updateMeta(); });
+$('gateAuto').addEventListener('click', () => { delete ui.sess.gateIdx; reanalyze(); });
+$('lenIn').addEventListener('change', () => {
+  const v = Math.round(+$('lenIn').value);
+  if (v >= 50 && v <= 5000) ui.sess.len = v; else delete ui.sess.len;
+  if (!ui.sess.demo) saveSession(ui.sess);
+  renderResult();
+});
+$('backBtn').addEventListener('click', () => show('home'));
+$('demoBtn').addEventListener('click', () => openSession(demoSession(false)));
+$('demoInBtn').addEventListener('click', () => openSession(demoSession(true)));
+let delArmed = 0;
+$('delBtn').addEventListener('click', () => {
+  const b = $('delBtn');
+  if (!delArmed) { b.textContent = 'Tik nog eens om te verwijderen'; delArmed = setTimeout(() => { delArmed = 0; b.textContent = 'Verwijder rit'; }, 3500); return; }
+  clearTimeout(delArmed); delArmed = 0;
+  store.del(LS_SESSION + ui.sess.id); store.set(LS_INDEX, store.get(LS_INDEX, []).filter(e => e.id !== ui.sess.id));
+  show('home');
+});
+
+/* ---------- export ---------- */
+function fileStamp(s) { const d = new Date(s.start), z = v => String(v).padStart(2, '0'); return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + '_' + z(d.getHours()) + z(d.getMinutes()); }
+function toGpx(s) {
+  let o = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Kart Tracker" xmlns="http://www.topografix.com/GPX/1/1">\n<trk><name>Kart ' + fileStamp(s) + '</name><trkseg>\n';
+  s.pts.forEach(p => { o += '<trkpt lat="' + p[1] + '" lon="' + p[2] + '"><time>' + new Date(s.start + p[0]).toISOString() + '</time><extensions><speed>' + p[3] + '</speed></extensions></trkpt>\n'; });
+  return o + '</trkseg></trk>\n</gpx>\n';
+}
+function toCsv(s) {
+  let o;
+  if (ui.A.hasGps) { o = 'tijd_s,lat,lon,snelheid_kmh,gps_marge_m\n'; s.pts.forEach(p => { o += (p[0] / 1000).toFixed(1) + ',' + p[1] + ',' + p[2] + ',' + (p[3] * KMH).toFixed(1) + ',' + p[4] + '\n'; }); }
+  else { o = 'tijd_s,g_kracht,draaisnelheid_graden_per_s\n'; const m = s.mot; if (m) m.g.forEach((g, i) => { o += (i * m.dt / 1000).toFixed(1) + ',' + (g / 100).toFixed(2) + ',' + m.y[i] + '\n'; }); }
+  return o;
+}
+async function shareFile(name, type, text) {
+  const file = new File([text], name, { type });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; } }
+  catch (e) { if (e && e.name === 'AbortError') return; }
+  const url = URL.createObjectURL(file), a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+$('gpxBtn').addEventListener('click', () => shareFile('kart_' + fileStamp(ui.sess) + '.gpx', 'application/gpx+xml', toGpx(ui.sess)));
+$('csvBtn').addEventListener('click', () => shareFile('kart_' + fileStamp(ui.sess) + '.csv', 'text/csv', toCsv(ui.sess)));
+
+/* ---------- boot ---------- */
+window.addEventListener('resize', redraw);
+$('ver').textContent = 'Versie ' + VERSION + (SIM ? ' · simulatie' : '');
+const left = store.get(LS_ACTIVE, null);                  // a recording that was cut off (page reloaded or closed)
+if (left && ((left.pts && left.pts.length >= 5) || (left.mot && left.mot.g && left.mot.g.length >= 150))) {
+  saveSession({ id: left.id, start: left.start, pts: left.pts || [], mot: left.mot });
+  notice('Je vorige opname was niet netjes gestopt. Wat er al gemeten was, staat nu bij je ritten.');
+}
+store.del(LS_ACTIVE);
+show('home');
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+</script>
+</body>
+</html>

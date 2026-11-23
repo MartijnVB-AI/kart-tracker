@@ -1,0 +1,15 @@
+{
+  "name": "Kart Tracker",
+  "short_name": "Kart Tracker",
+  "description": "Snelheid, route en rondetijden tijdens het karten, via de GPS van je telefoon.",
+  "lang": "nl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
