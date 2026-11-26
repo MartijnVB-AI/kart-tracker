@@ -173,7 +173,7 @@ tbody tr.sel td { background: var(--surface); }
   <details>
     <summary>Checklist voor in de pits</summary>
     <ol>
-      <li><b>Buiten of binnen.</b> Buiten meet GPS je snelheid en route. Onder een dak valt GPS vaak weg; dan meet de bewegingssensor nog wel G-krachten en schat hij je rondetijden.</li>
+      <li><b>Buiten of binnen.</b> Buiten meet GPS je snelheid en route. Onder een dak valt GPS weg en heeft je telefoon alleen een grove wifi-locatie; daar is geen snelheid uit te halen. De bewegingssensor meet dan nog wel G-krachten en schat je rondetijden.</li>
       <li><b>Twee keer toestaan.</b> Bij het starten vraagt je telefoon om beweging en om locatie. Kies bij allebei voor toestaan.</li>
       <li><b>Exacte locatie aan.</b> Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari-websites: “Bij gebruik van app” en “Exacte locatie”.</li>
       <li><b>Scherm blijft aan.</b> Een webpagina meet alleen zolang hij open en zichtbaar is. Het scherm blijft daarom vanzelf aan (zwart, dus zuinig). Vergrendel je telefoon niet met de zijknop.</li>
@@ -304,7 +304,7 @@ tbody tr.sel td { background: var(--surface); }
 <script>
 (() => {
 'use strict';
-const VERSION = '1.2';
+const VERSION = '1.3';
 const $ = id => document.getElementById(id);
 const RAD = Math.PI / 180, R = 6371000, KMH = 3.6;
 const LS_INDEX = 'kart.index.v1', LS_SESSION = 'kart.session.', LS_ACTIVE = 'kart.active.v1';
@@ -514,10 +514,16 @@ function analyze(sess) {
   const p = sess.pts || [], n = p.length;
   const A = { n, X: new Float64Array(n), Y: new Float64Array(n), T: new Float64Array(n), V: new Float64Array(n),
     laps: [], cross: [], gate: null, top: 0, topI: 0, dist: 0, moving: 0, dur: 0, gaps: 0, best: -1, acc: 0,
-    hasGps: false, mot: null, maxG: 0, maxGT: 0, lapSrc: '' };
+    hasGps: false, coarse: false, mot: null, maxG: 0, maxGT: 0, lapSrc: '' };
   const { T, V } = A;
   if (n >= 2) analyzeGps(sess, A);
-  A.hasGps = n >= 5 && A.top > 1.4 && A.acc <= 30;
+  // Real satellite GPS gives a fix every second, a few metres precise. Under a roof a phone falls back
+  // to a coarse wifi position (about ±20 m, every ~6 s), which says nothing about speed, route or laps.
+  let good = 0; const steps = [];
+  for (let i = 0; i < n; i++) { if ((p[i][4] || 99) <= 15) good++; if (i) steps.push(T[i] - T[i - 1]); }
+  steps.sort((a, b) => a - b);
+  A.hasGps = n >= 5 && A.top > 1.4 && good >= 0.5 * n && steps[steps.length >> 1] <= 3;
+  A.coarse = n >= 5 && !A.hasGps;
   if (!A.hasGps) { A.laps = []; A.cross = []; A.gate = null; A.gaps = 0; }
   if (A.laps.length) A.lapSrc = 'gps';
   const m = sess.mot;
@@ -561,13 +567,18 @@ function analyze(sess) {
 }
 
 /* ---------- sessions ---------- */
-function saveSession(sess) {
+function indexEntry(sess) {
   const A = analyze(sess);
-  const ok = store.set(LS_SESSION + sess.id, { id: sess.id, start: sess.start, pts: sess.pts, mot: sess.mot, gateIdx: sess.gateIdx, len: sess.len });
-  const idx = store.get(LS_INDEX, []).filter(e => e.id !== sess.id);
-  idx.push({ id: sess.id, start: sess.start, dur: A.dur, top: A.hasGps ? A.top : 0, maxG: A.maxG, laps: A.laps.length, best: A.best >= 0 ? A.laps[A.best].time : null });
-  idx.sort((a, b) => b.start - a.start);
+  return { id: sess.id, start: sess.start, dur: A.dur, top: A.hasGps ? A.top : 0, maxG: A.maxG, laps: A.laps.length, best: A.best >= 0 ? A.laps[A.best].time : null };
+}
+function putIndex(entry) {
+  const idx = store.get(LS_INDEX, []).filter(e => e.id !== entry.id);
+  idx.push(entry); idx.sort((a, b) => b.start - a.start);
   store.set(LS_INDEX, idx);
+}
+function saveSession(sess) {
+  const ok = store.set(LS_SESSION + sess.id, { id: sess.id, start: sess.start, pts: sess.pts, mot: sess.mot, gateIdx: sess.gateIdx, len: sess.len });
+  putIndex(indexEntry(sess));
   return ok;
 }
 function renderHome() {
@@ -608,7 +619,9 @@ function updState() {
   if (!rec) return;
   const wakeOn = !!(wake && !wake.released), waited = Date.now() - rec.wall0, hasMot = rec.mot.g.length > 5;
   let msg;
-  if (rec.pts.length) msg = 'Opname loopt. Stop je telefoon nu in een dichte zak.';
+  if (rec.goodFix >= 3) msg = 'Opname loopt met GPS. Stop je telefoon nu in een dichte zak.';
+  else if (rec.pts.length && waited < 25000) msg = 'Locatie gevonden, wachten op echte GPS…';
+  else if (rec.pts.length) msg = 'Hier is alleen een grove locatie en geen echte GPS, dus snelheid en route lukken niet.' + (hasMot ? ' De bewegingssensor meet wel: G-krachten en geschatte rondetijden. Je kunt hem wegstoppen.' : ' Er komt ook geen bewegingsdata binnen, dus zo wordt er niets bruikbaars gemeten.');
   else if (rec.geoErr === 1) msg = 'Je telefoon geeft deze pagina geen locatie. Zet aan: Instellingen → Privacy en beveiliging → Locatievoorzieningen → Safari-websites → Bij gebruik van app, met Exacte locatie. Stop daarna, sluit de app helemaal af en start opnieuw.' + (hasMot ? ' De bewegingssensor meet intussen wel.' : '');
   else if (rec.geoErr === 2) msg = 'Je telefoon kan nu geen positie bepalen. Staat Locatievoorzieningen aan (Instellingen → Privacy en beveiliging)?' + (hasMot ? ' De bewegingssensor meet intussen wel.' : '');
   else if (waited < 25000) msg = 'GPS zoeken… Buiten duurt dat een paar tellen.';
@@ -670,7 +683,8 @@ function onFix(pos) {
   if (!SIM && (!(ts > 0) || Math.abs(ts - now) > 120000)) ts = now;
   rec.lastWall = now; rec.geoErr = 0;
   const acc = c.accuracy || 0;
-  setGps('GPS ±' + Math.round(acc) + ' m', acc <= 10 ? 'good' : acc <= 25 ? 'fair' : 'bad');
+  if (acc > 0 && acc <= 15) rec.goodFix++;
+  setGps((acc <= 15 ? 'GPS ±' : 'Grove locatie ±') + Math.round(acc) + ' m', acc <= 10 ? 'good' : acc <= 15 ? 'fair' : 'bad');
   if (rec.last && ts <= rec.last.ts) return;
   let v = (typeof c.speed === 'number' && c.speed >= 0) ? c.speed : null;
   // without a satellite speed, only trust position differences when both fixes are precise
@@ -728,7 +742,7 @@ function start() {
     return;
   }
   const now = Date.now();
-  rec = { id: String(now), wall0: now, t0: now, pts: [], mot: { dt: 200, g: [], y: [] }, top: 0, dist: 0, maxG: 0, last: null, lastWall: 0, watch: null, ticks: 0, timer: 0 };
+  rec = { id: String(now), wall0: now, t0: now, pts: [], mot: { dt: 200, g: [], y: [] }, top: 0, dist: 0, maxG: 0, goodFix: 0, last: null, lastWall: 0, watch: null, ticks: 0, timer: 0 };
   ['recSpeed', 'recTop', 'recPts'].forEach(id => { $(id).textContent = '0'; });
   $('recDist').textContent = '0,00'; $('recTime').textContent = '0:00'; $('recG').textContent = '–';
   setGps('GPS zoeken…', '');
@@ -965,9 +979,9 @@ function renderResult() {
   $('resTitle').textContent = s.demo ? (s.indoor ? 'Voorbeeld zonder GPS' : 'Voorbeeldrit') : dateFmt.format(new Date(s.start));
   $('resSub').textContent = s.demo ? 'Nagebootste data op een verzonnen baan, zodat je ziet wat je na een rit krijgt.'
     : 'Duur ' + fmtClock(A.dur) + (gps ? ' · GPS ±' + Math.round(A.acc) + ' m' : ' · zonder GPS');
-  $('heroLabel').textContent = gps ? 'Topsnelheid' : 'Hoogste G-kracht';
-  $('sTop').textContent = gps ? nf1.format(A.top * KMH) : nf2.format(A.maxG);
-  $('heroUnit').textContent = gps ? 'km/h' : 'g';
+  $('heroLabel').textContent = gps ? 'Topsnelheid' : mot ? 'Hoogste G-kracht' : 'Geen bruikbare meting';
+  $('sTop').textContent = gps ? nf1.format(A.top * KMH) : mot ? nf2.format(A.maxG) : '–';
+  $('heroUnit').textContent = gps ? 'km/h' : mot ? 'g' : '';
   const avg = gps ? (A.moving > 0 ? A.dist / A.moving : 0) : (len && lapsTime ? A.laps.length * len / lapsTime : null);
   const dst = gps ? A.dist : (len && A.laps.length ? A.laps.length * len : null);
   setStat('sAvg', avg === null ? '–' : nf1.format(avg * KMH), avg === null ? '' : 'km/h');
@@ -980,16 +994,20 @@ function renderResult() {
   else if (gps) setStat('sX', '±' + Math.round(A.acc), 'm');
   else setStat('sX', len ? String(len) : '–', len ? 'm' : '');
   $('mapSec').hidden = !gps; $('spdSec').hidden = !gps; $('gSec').hidden = !mot;
-  $('lenRow').hidden = gps; $('lenIn').value = len || '';
+  $('lenRow').hidden = gps || !A.laps.length; $('lenIn').value = len || '';
   $('gateRow').hidden = !gps;
   $('lapCol4').textContent = gps ? 'Top' : 'Max g';
   $('lapNote').textContent = A.lapSrc === 'mot'
     ? 'Zonder GPS zijn de rondes geschat uit het bochtenpatroon dat zich elke ronde herhaalt. Reken op een paar tienden afwijking en leg ze naast de tijden van de baan.'
     : gps ? 'De start/finish ligt standaard op je snelste punt. Rondetijden uit telefoon-GPS kloppen op ongeveer 0,2 seconde.' : '';
   $('noLaps').textContent = gps ? 'Geen volledige rondes gevonden. Verplaats de start/finish naar een punt waar je elke ronde langskomt.'
-    : 'Geen herhalend rondepatroon gevonden. Daarvoor zijn minstens een paar volle rondes achter elkaar nodig.';
+    : mot ? 'Geen herhalend rondepatroon gevonden. Daarvoor zijn minstens een paar volle rondes achter elkaar nodig.'
+    : 'Zonder GPS en zonder bewegingsdata zijn er geen rondes te bepalen.';
   const warn = [];
-  if (!gps && !s.demo) warn.push('Hier was geen bruikbare GPS-ontvangst, dus er is geen snelheid of route. Wat je ziet komt van de bewegingssensor.');
+  if (!gps && !s.demo) warn.push((A.coarse
+    ? 'Hier was geen echte GPS, alleen een grove wifi-locatie (±' + Math.round(A.acc) + ' m). Daar is geen snelheid of route uit te halen.'
+    : 'Hier was geen GPS-ontvangst, dus er is geen snelheid of route.')
+    + (mot ? ' Wat je ziet komt van de bewegingssensor.' : ' Er is ook geen bewegingsdata opgenomen: kies bij het starten voor toestaan als je telefoon om Beweging en richting vraagt.'));
   if (A.gaps) warn.push('De opname is ' + A.gaps + ' keer onderbroken (scherm uit, app op de achtergrond of GPS kwijt). Van die stukken is er geen data.');
   if (gps && A.acc > 15) warn.push('De GPS-ontvangst was matig (±' + Math.round(A.acc) + ' m), dus snelheden en rondetijden zijn minder betrouwbaar.');
   showWarn(warn.join(' '));
@@ -1060,11 +1078,18 @@ function toGpx(s) {
   s.pts.forEach(p => { o += '<trkpt lat="' + p[1] + '" lon="' + p[2] + '"><time>' + new Date(s.start + p[0]).toISOString() + '</time><extensions><speed>' + p[3] + '</speed></extensions></trkpt>\n'; });
   return o + '</trkseg></trk>\n</gpx>\n';
 }
+// One table with everything that was measured: a row per motion sample (5 per second), with each
+// position fix in the columns beside the sample it belongs to.
 function toCsv(s) {
-  let o;
-  if (ui.A.hasGps) { o = 'tijd_s,lat,lon,snelheid_kmh,gps_marge_m\n'; s.pts.forEach(p => { o += (p[0] / 1000).toFixed(1) + ',' + p[1] + ',' + p[2] + ',' + (p[3] * KMH).toFixed(1) + ',' + p[4] + '\n'; }); }
-  else { o = 'tijd_s,g_kracht,draaisnelheid_graden_per_s\n'; const m = s.mot; if (m) m.g.forEach((g, i) => { o += (i * m.dt / 1000).toFixed(1) + ',' + (g / 100).toFixed(2) + ',' + m.y[i] + '\n'; }); }
-  return o;
+  const m = s.mot && s.mot.g && s.mot.g.length ? s.mot : null, dt = m ? m.dt / 1000 : 0, N = m ? m.g.length : 0, rows = [];
+  for (let i = 0; i < N; i++) rows.push([(i * dt).toFixed(1), (m.g[i] / 100).toFixed(2), m.y[i], '', '', '', '', '']);
+  (s.pts || []).forEach(p => {
+    const t = p[0] / 1000, fix = [t.toFixed(2), p[1], p[2], (p[3] * KMH).toFixed(1), p[4]], i = m ? Math.round(t / dt) : -1;
+    if (i >= 0 && i < N && rows[i][3] === '') rows[i].splice(3, 5, ...fix);
+    else rows.push([t.toFixed(1), '', '', ...fix]);
+  });
+  rows.sort((a, b) => a[0] - b[0]);
+  return 'tijd_s,g_kracht,draaisnelheid_graden_per_s,gps_tijd_s,lat,lon,snelheid_kmh,gps_marge_m\n' + rows.map(r => r.join(',')).join('\n') + '\n';
 }
 async function shareFile(name, type, text) {
   const file = new File([text], name, { type });
@@ -1086,6 +1111,13 @@ if (left && ((left.pts && left.pts.length >= 5) || (left.mot && left.mot.g && le
   notice('Je vorige opname was niet netjes gestopt. Wat er al gemeten was, staat nu bij je ritten.');
 }
 store.del(LS_ACTIVE);
+const ANALYSIS = 2;                                        // bump when analyze() changes what the ride list shows
+if (store.get('kart.analysis', 0) !== ANALYSIS) {
+  try {
+    store.get(LS_INDEX, []).forEach(e => { const s = store.get(LS_SESSION + e.id, null); if (s && s.id) { s.pts = s.pts || []; putIndex(indexEntry(s)); } });
+  } catch (e) {}
+  store.set('kart.analysis', ANALYSIS);
+}
 show('home');
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
